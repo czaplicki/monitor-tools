@@ -1,0 +1,135 @@
+#!/usr/bin/env -S nu --stdin
+
+use std/log
+
+# Lid detection logic
+def get-lid-state []: nothing -> bool {
+  let lid_file = (glob /proc/acpi/button/lid/*/state | first)
+  log info $"lidfile: ($lid_file)"
+  if ($lid_file | is-empty) { 
+    return true 
+  }
+  log info $"lidfile is not empty"
+  try {
+    let lid_file_content = open $lid_file
+    log info $"lidfile: ''($lid_file_content)''"
+    return ($lid_file_content =~ open)
+  } catch {|e|
+    error make {
+      msg: "Failed to open lid status file"
+      raw: $e
+    }
+  }
+}
+
+# # Decodes the binary EDID blob using the edid-decode utility
+# def get-edid-json [edid_path: path] {
+#   if not ($edid_path | path exists) { return {} }
+  
+#   # edid-decode expects binary input; we pipe the raw file content
+#   let raw_edid = (open $edid_path --raw)
+  
+#   if ($raw_edid | bytes length) == 0 { return {} }
+
+#   # Using -j for JSON output. If your version is older, 
+#   # we'd have to parse the text, but modern NixOS has the JSON support.
+#   try {
+#     $raw_edid | edid-decode --json | from json
+#   } catch { |e| error make {
+#       msg: "Failed to decode EDID"
+#   }}
+# }
+
+def wrap-err-msg [msg:string]: any -> closure {
+  {|e| error make {
+    msg: $msg
+    raw: $in
+    label: {
+      text: "this failed"
+      span: (metadata $in).span
+    }
+  }}
+}
+# # nu-lint-ignore: missing_output_type
+# def wrap-err-msg [msg:string]: closure -> any {
+#   try {
+#     return (do $in)
+#   } catch {|e| error make {
+#     msg: $msg
+#     raw: $e
+#     label: {
+#       text: "this clousure failed"
+#       span: (metadata $in).span
+#     }
+#   }}
+# }
+
+# nu-lint-ignore: missing_output_type
+def get-monitor-field [path:path, field:string]: nothing -> any {
+  if ($"($path)/($field)" | path exists) {
+    try {
+      open $"($path)/($field)" | str trim
+    } catch (wrap-err-msg $"Failed to get monitor value: ($field)")
+  }
+  return null
+}
+
+def get-monitor-info [path:path]: nothing -> record {
+  let modes = (
+    get-monitor-field $path modes
+    | if ($in == null) { [] }
+      else { $in | lines | str trim }
+  )
+  {
+    name: ($path | path basename)
+    interface: (($path | path basename) | str replace --regex card\d+- '')
+    status:  (get-monitor-field $path status)
+    enabled: (get-monitor-field $path enabled)
+    modes: $modes
+  }
+}
+def get-monitor-edid [path:path]: nothing -> record {
+  # Pull common fields to the top level for convenience
+  # manufacturer: ($edid_data | get -i hex_manufacturer_id)
+  # model_name: ($edid_data | get -i display_parameters.model_name)
+  # serial_number: ($edid_data | get -i display_parameters.serial_number):
+  # Keep the full decoded object for deep inspection
+  # edid_details: $edid_data
+  let edid_info = 
+}
+
+def main [
+  --list (-l)     # Only print monitor names
+  --disabled (-d) # Include disabled monitors
+  --edid (-e)     # Include edid info
+]: nothing -> string {
+
+ let entries = try {
+     ls /sys/class/drm | where name =~ card\d+-
+   } catch (wrap-err-msg "Failed to query sys drm files")
+  log info $"entries: \n($entries)"
+
+  # Filter based on `enabled`
+  let entries = if ($disabled) {
+  } else { $entries }
+
+  # Print monitor names and exit
+  if ($list) {
+    return 
+  }
+
+  # Print json data
+  let monitor_info = (
+    $entries | each {|it|
+      let info = get-monitor-info $it.name
+      if (not $edid) { $info } else {
+        let edid_info = get-edid-info $"($it.name)/edid"
+        info | merge $edid_info
+      }
+    }
+  )
+  return {
+    monitors: $monitor_info
+    lid: { open: (get-lid-state) }
+  } | to json
+}
